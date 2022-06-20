@@ -15,7 +15,7 @@ There's a lot more to discuss, regarding the idea, what it is, what it isn't, et
 
 ```clojure
 (def +s
-  (af
+  (af/fect
    {:as ::+s :with mocker
     :op +
     :ef (fn [{:keys [args]}]
@@ -57,22 +57,23 @@ And `mocker` is defined as:
        " but actually got "     (pr-str actual)))
 
 (def mocker
-  (af
+  (af/fect
    {:as :mock ;; :with logger ; <- for logging the env
     :void :mock
     :join #(do {:mock (vec (concat (:mock %1) (:mock %2)))})
-    :af (fn [{:as env :keys [mock op arg-fn _args]}]
-          (let [failures (->> mock
-                              (partition 2)
-                              (mapv (fn [[in out]]
-                                      (assert (coll? in))
-                                      (let [result (apply op (arg-fn in))]
-                                        (when (and result (not= result out))
-                                          (failure-message env in out result)))))
-                              (filter (complement nil?)))]
-            (when (seq failures)
-              (->> failures (mapv (fn [er] (throw (ex-info (str er) {}))))))
-            env))}))
+    :af (fn [{:as env :keys [mock op]}]
+          (when mock
+            (let [this-af (af/fect (-> env (dissoc :mock) (assoc :as (:is env))))
+                  failures (->> mock
+                                (partition 2)
+                                (mapv (fn [[in out]]
+                                        (assert (coll? in))
+                                        (let [result (apply op (this-af in))]
+                                          (when (and result (not= result out))
+                                            (failure-message env in out result)))))
+                                (filter (complement nil?)))]
+              (when (seq failures)
+                (->> failures (mapv (fn [er] (throw (ex-info (str er) {})))))))))}))
 ```
 
 You can combine these affects together via direct implementation inheritence or like mixins via `:with`.
