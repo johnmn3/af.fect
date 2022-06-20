@@ -14,31 +14,39 @@ These are not objects in the object oriented sense. Closures could be seen as a 
 There's a lot more to discuss, regarding the idea, what it is, what it isn't, etc. but let's jump straight to some examples:
 
 ```clojure
+(defn strings->ints [& string-ints]
+  (->> string-ints
+       (map str)
+       (mapv edn/read-string)))
+
 (def +s
   (af/fect
    {:as ::+s :with mocker
     :op +
     :ef (fn [{:keys [args]}]
-          {:args (apply strings->ints)})
+          {:args (apply strings->ints args)})
     :mock [[1 "2" 3 4 "5" 6] 21]}))
 
 (+s "1" 2)
 ;=> 3
 
-(defn vec->ints [s]
+(defn vecs->ints [& s]
   (->> s
-       (mapv #(if (vector? %)
-                (first %)
-                %))))
+       (reduce (fn [acc arg]
+                 (if (vector? arg)
+                   (into acc arg)
+                   (conj acc arg)))
+               [])))
 
 (def +sv
   (+s
    {:as ::+sv
     :ef (fn [{:keys [args]}]
-          {:args (apply vec->ints)})
+          {:args (apply vecs->ints args)})
     :mock [[1 [2]] 3]}))
 
-(+sv "1" [2])
+(+sv "1" [2] 3 [4 5])
+;=> 15
 ```
 
 By passing a new environment map to the created function `+s` that has an `:as` key in it, the function knows to create another function derived from it.
@@ -47,9 +55,14 @@ By passing a new environment map to the created function `+s` that has an `:as` 
 
 These _dual order_ functions, containing both affectors and effectors are called _affects_.
 
-And `mocker` is defined as:
+And `mocker` above is defined as:
 
 ```clojure
+(ns af.ex
+  (:require
+   [af.fect :as af]
+   [clojure.edn :as edn]))
+
 (defn failure-message [data input output actual]
   (str "Failure in "   (or (:is data) (:as data))
        " with mock inputs " (pr-str input)
@@ -58,17 +71,17 @@ And `mocker` is defined as:
 
 (def mocker
   (af/fect
-   {:as :mock ;; :with logger ; <- for logging the env
+   {:as :mock
     :void :mock
-    :join #(do {:mock (vec (concat (:mock %1) (:mock %2)))})
-    :af (fn [{:as env :keys [mock op]}]
+    :join #(do {:mocks (vec (concat (:mock %1) (:mock %2)))})
+    :af (fn [{:as env :keys [mock]}]
           (when mock
             (let [this-af (af/fect (-> env (dissoc :mock) (assoc :as (:is env))))
                   failures (->> mock
                                 (partition 2)
                                 (mapv (fn [[in out]]
                                         (assert (coll? in))
-                                        (let [result (apply op (this-af in))]
+                                        (let [result (apply this-af in)]
                                           (when (and result (not= result out))
                                             (failure-message env in out result)))))
                                 (filter (complement nil?)))]
