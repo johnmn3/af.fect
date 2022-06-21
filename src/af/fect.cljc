@@ -218,7 +218,6 @@
 (def children
   (with
    {:as :children
-    :void :children
     :ef (fn children-af [{:as env :keys [children args]}]
           (let [children (if-not children
                            []
