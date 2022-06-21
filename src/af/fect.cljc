@@ -20,6 +20,18 @@
               :index %1})))
        vec))
 
+(defn apply-env [as afns]
+  (->> afns
+       (map-indexed
+        #(if (-> %2 meta :as)
+           %2
+           (with-meta
+             (fn [env]
+               (%2 env))
+             {:as (-> as str rest (->> (apply str)) (str "-" %1) keyword)
+              :index %1})))
+       vec))
+
 (defn join [afn]
   (fn sub
     [{:keys [joined-env parent-env child-env]}]
@@ -77,33 +89,36 @@
                          (mapv (partial tag-fn as) fin-ends)]
         threaded-joins (thread-joins as (muff join))
         static-joins (concat-distinct threaded-joins child-joins joins)
-        static-affects (concat-distinct afs (merge-env as af-envs) child-affects affects af-ends)
-        static-effects (concat-distinct efs (merge-env as ef-envs) child-effects effects ef-ends)
+        static-affects (concat-distinct afs (apply-env as af-envs) child-affects affects af-ends)
+        static-effects (concat-distinct efs (apply-env as ef-envs) child-effects effects ef-ends)
         static-finally (concat-distinct fins child-finally finally fin-ends)
         comp-joins (apply comp (reverse (concat [wrap-joins] static-joins [:joined-env])))
         comp-affects (apply comp (reverse static-affects))
         comp-effects (apply comp (reverse static-effects))
-        comp-finally (apply comp (reverse static-finally))]
-    (merge
-     parent-env
-     (dissoc child-env :as :join :joined-env :child-env :parent-env :af :af-env :af-end :ef :ef-env :ef-end :fin :fin-end)
-     {:is           as
-      :was          is
-      :comp-joins   comp-joins
-      :comp-affects comp-affects
-      :comp-effects comp-effects
-      :comp-finally comp-finally
-      :joins        static-joins
-      :affects      static-affects
-      :effects      static-effects
-      :finally      static-finally})))
+        comp-finally (apply comp (reverse static-finally))
+        combined-env (merge
+                      parent-env
+                      (dissoc child-env :as :join :joined-env :child-env :parent-env :af :af-env :af-end :ef :ef-env :ef-end :fin :fin-end)
+                      {:is           as
+                       :was          is
+                       :comp-joins   comp-joins
+                       :comp-affects comp-affects
+                       :comp-effects comp-effects
+                       :comp-finally comp-finally
+                       :joins        static-joins
+                       :affects      static-affects
+                       :effects      static-effects
+                       :finally      static-finally})
+        joined-env (if-let [joined-env (comp-joins parent-env child-env)]
+                     (if (seq joined-env)
+                       (merge combined-env joined-env)
+                       combined-env)
+                     combined-env)]
+    joined-env))
 
 (defn combine-and-run-affects [parent-env child-env]
   (let [grown-env (combine parent-env child-env)
-        joined-env (if-let [comp-joins (:comp-joins grown-env)]
-                     (merge grown-env (comp-joins parent-env child-env))
-                     grown-env)
-        combined-env ((:comp-affects joined-env) joined-env)
+        combined-env ((:comp-affects grown-env) grown-env)
         af-once (:af-one combined-env identity)
         one-time-env (af-once combined-env)
         final-af-env (merge (dissoc combined-env :af-one)
@@ -131,8 +146,10 @@
 
 (defn pp-env [{:as env :keys [with joins affects effects finally]}]
   (let [out-map (merge (dissoc env :comp-joins :comp-effects :comp-affects :comp-finally)
-                       (when (seq with)
+                       (when (and (not (fn? with)) (seq with))
                          {:with (mapv #(-> (% :af/env) :is) with)})
+                       (when (fn? with)
+                         {:with [(-> (with :af/env)  :is)]})
                        (when (seq joins)
                          {:joins (mapv (comp :as meta) joins)})
                        (when (seq affects)
@@ -170,45 +187,36 @@
    base
    {:is :affect/base :as :affect/base}))
 
-(defn convert-effect-env-to-params [affect]
-  (let [{:as env
-         :keys [is joins affects effects finally]} (if (fn? affect)
-                                                     (affect :affect/env)
-                                                     affect)]
-    (merge (dissoc env :with :comp-affects :comp-effects :comp-finally :joins :affects :effects :finally)
-           {:as is
-            :join joins
-            :af affects
-            :ef effects
-            :fin finally})))
-
-(def with
-  (fect*
-   {:as :with
-    :void :with-pre
-    :af-env (fn with-af-env [{:as env :keys [with]}]
-              (if-not with
-                env
-                (let [without (fect* (-> env (assoc :as (:is env)) (dissoc :with)))]
-                  (->> with
-                       muff
-                       (#(concat % [without]))
-                       (reduce #(let [params (convert-effect-env-to-params %2)]
-                                  (apply %1 params (:args params))))
-                       (#(% :affect/env))))))}))
-
 (def void
-  (with
+  (fect*
    {:as :void
-    :void :with
     :join (fn void-join [env1 env2]
             {:void (vec (set (concat (-> env2 :void muff)
                                      (-> env1 :void muff))))})
     :af-env (fn void-af-env [{:as env :keys [void]}]
               (apply dissoc env :with (muff void)))}))
 
-(def children
+(defn <-data [affect]
+  (if (fn? affect)
+    (affect :affect/env)
+    affect))
+
+(def with
   (void
+   {:as :with
+    :void :with
+    :af-env (fn with-af-env [{:as env :keys [with]}]
+              (if-not with
+                env
+                (let [without (-> env (assoc :as (:is env)) (dissoc :with))]
+                  (->> with
+                       muff
+                       (#(concat [void] %))
+                       (reduce #(combine (<-data %1) (<-data %2)))
+                       (#(combine % without))))))}))
+
+(def children
+  (with
    {:as :children
     :void :children
     :ef (fn children-af [{:as env :keys [children args]}]
