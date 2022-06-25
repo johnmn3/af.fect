@@ -218,13 +218,13 @@
 (def children
   (with
    {:as :children
-    :void :children
     :ef (fn children-af [{:as env :keys [children args]}]
-          (let [children (if-not children
+          (let [children (muff children)
+                children (if-not (seq children)
                            []
-                           (if-not (fn? children)
+                           (if-not (:ef/runnable? (meta (first children)))
                              children
-                             (children env)))]
+                             ((first children) env)))]
             {:args (vec (concat args children))}))}))
 
 (def fect
